@@ -1,0 +1,11 @@
+"""
+Custom JWT views for email-based authentication.
+"""
+
+from rest_framework_simplejwt.views import TokenObtainPairView
+
+from .auth_serializers import EmailTokenObtainPairSerializer
+
+
+class EmailTokenObtainPairView(TokenObtainPairView):
+    serializer_class = EmailTokenObtainPairSerializer
