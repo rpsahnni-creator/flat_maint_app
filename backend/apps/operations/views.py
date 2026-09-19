@@ -9,16 +9,20 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import status, viewsets
+from django.http import HttpResponse
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import Society
+from apps.operations.email_billing import send_bill_pdf_email, send_payment_confirmation_email
 from apps.operations.models import (
     Amenity,
     Bill,
     Booking,
+    ChatMessage,
+    ChatThread,
     Complaint,
     Expense,
     Notice,
@@ -27,7 +31,10 @@ from apps.operations.models import (
     Unit,
     Visitor,
 )
+from apps.operations.pdf_docs import build_bill_pdf, build_payment_receipt_pdf
 from apps.operations.permissions import (
+    can_view_all_units,
+    is_guard,
     is_society_admin,
     resident_unit_ids,
     user_society_ids,
@@ -36,6 +43,8 @@ from apps.operations.serializers import (
     AmenitySerializer,
     BillSerializer,
     BookingSerializer,
+    ChatMessageSerializer,
+    ChatThreadSerializer,
     ComplaintSerializer,
     ExpenseSerializer,
     NoticeSerializer,
@@ -55,6 +64,15 @@ def _primary_society(user):
     return Society.objects.filter(id=ids[0]).first()
 
 
+def _can_use_unit(user, unit):
+    """Admins/guards may use any society unit; owners only their linked unit(s)."""
+    if unit is None:
+        return False
+    if is_society_admin(user, unit.society_id) or is_guard(user, unit.society_id):
+        return True
+    return unit.id in resident_unit_ids(user, unit.society_id)
+
+
 class SocietyScopedMixin:
     """Scopes querysets to the user's societies; residents see own unit rows."""
 
@@ -69,7 +87,7 @@ class SocietyScopedMixin:
         qs = super().get_queryset()
         society_ids = user_society_ids(self.request.user)
         qs = qs.filter(**{f'{self.society_field}_id__in': society_ids})
-        if not is_society_admin(self.request.user) and self.unit_field:
+        if not can_view_all_units(self.request.user) and self.unit_field:
             unit_ids = resident_unit_ids(self.request.user)
             qs = qs.filter(**{f'{self.unit_field}_id__in': unit_ids})
         return qs
@@ -95,7 +113,7 @@ class UnitViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
         qs = Unit.objects.filter(society_id__in=user_society_ids(self.request.user))
         if self.request.query_params.get('is_active') == 'true':
             qs = qs.filter(is_active=True)
-        if not is_society_admin(self.request.user):
+        if not can_view_all_units(self.request.user):
             qs = qs.filter(id__in=resident_unit_ids(self.request.user))
         return qs
 
@@ -108,7 +126,7 @@ class UnitViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
 
 
 class BillViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
-    queryset = Bill.objects.select_related('unit').all()
+    queryset = Bill.objects.select_related('unit', 'society').all()
     serializer_class = BillSerializer
     permission_classes = [IsAuthenticated]
     unit_field = 'unit'
@@ -146,8 +164,9 @@ class BillViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
         due_day = min(28, max(1, int(society.due_day_of_month)))
         due_date = datetime(year, month, due_day).date()
 
-        units = Unit.objects.filter(society=society, is_active=True)
+        units = Unit.objects.filter(society=society, is_active=True).select_related('resident_user')
         created = []
+        emails_sent = 0
         for unit in units:
             if Bill.objects.filter(unit=unit, period_month=month, period_year=year).exists():
                 continue
@@ -164,11 +183,43 @@ class BillViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
                 status='pending',
             )
             created.append(bill)
-        return Response(BillSerializer(created, many=True).data, status=201)
+            result = send_bill_pdf_email(bill)
+            if result.get('sent'):
+                emails_sent += 1
+        payload = BillSerializer(created, many=True).data
+        return Response(
+            {
+                'bills': payload,
+                'count': len(created),
+                'emails_sent': emails_sent,
+            },
+            status=201,
+        )
+
+    @action(detail=True, methods=['get'])
+    def pdf(self, request, pk=None):
+        bill = self.get_object()
+        pdf_bytes = build_bill_pdf(bill)
+        unit = bill.unit.unit_number
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = (
+            f'attachment; filename="bill-{unit}-{bill.period_month}-{bill.period_year}.pdf"'
+        )
+        return response
+
+    @action(detail=True, methods=['post'], url_path='email-pdf')
+    def email_pdf(self, request, pk=None):
+        bill = self.get_queryset().select_related('unit', 'society', 'unit__resident_user').filter(pk=pk).first()
+        if not bill:
+            return Response({'detail': 'Not found'}, status=404)
+        if not is_society_admin(request.user) and bill.unit.resident_user_id != request.user.id:
+            return Response({'detail': 'Not allowed'}, status=403)
+        result = send_bill_pdf_email(bill, override_email=request.data.get('email') or None)
+        return Response(result)
 
 
 class PaymentViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
-    queryset = Payment.objects.all()
+    queryset = Payment.objects.select_related('bill', 'unit', 'society', 'unit__resident_user').all()
     serializer_class = PaymentSerializer
     permission_classes = [IsAuthenticated]
     unit_field = 'unit'
@@ -205,7 +256,43 @@ class PaymentViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
             elif paid_total > 0:
                 bill.status = 'partial'
             bill.save(update_fields=['status'])
-        return Response(PaymentSerializer(payment).data, status=201)
+
+        # Reload for PDF/email with relations
+        payment = Payment.objects.select_related('bill', 'unit', 'society', 'unit__resident_user').get(pk=payment.pk)
+        email_result = send_payment_confirmation_email(
+            payment,
+            override_email=request.data.get('email') or None,
+        )
+        data = PaymentSerializer(payment).data
+        data['email_sent'] = email_result['sent']
+        data['email_to'] = email_result['email']
+        data['email_reason'] = email_result['reason']
+        data['pdf_url'] = f'/api/v1/payments/{payment.pk}/pdf/'
+        return Response(data, status=201)
+
+    @action(detail=True, methods=['get'])
+    def pdf(self, request, pk=None):
+        payment = self.get_object()
+        pdf_bytes = build_payment_receipt_pdf(payment)
+        unit = payment.unit.unit_number
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="receipt-{unit}-{payment.pk}.pdf"'
+        return response
+
+    @action(detail=True, methods=['post'], url_path='resend-email')
+    def resend_email(self, request, pk=None):
+        payment = self.get_queryset().select_related(
+            'bill', 'unit', 'society', 'unit__resident_user'
+        ).filter(pk=pk).first()
+        if not payment:
+            return Response({'detail': 'Not found'}, status=404)
+        if not is_society_admin(request.user) and payment.unit.resident_user_id != request.user.id:
+            return Response({'detail': 'Not allowed'}, status=403)
+        result = send_payment_confirmation_email(
+            payment,
+            override_email=request.data.get('email') or None,
+        )
+        return Response(result)
 
 
 class ExpenseViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
@@ -262,6 +349,10 @@ class VisitorViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
             host_unit = Unit.objects.filter(
                 id=request.data['host_unit_id'], society=society
             ).first()
+            if not _can_use_unit(request.user, host_unit):
+                return Response({'detail': 'Invalid host unit'}, status=403)
+        elif not is_society_admin(request.user, society.id):
+            return Response({'detail': 'host_unit_id required'}, status=400)
         visitor = Visitor.objects.create(
             society=society,
             visitor_name=request.data.get('visitor_name', ''),
@@ -301,6 +392,8 @@ class BookingViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
         unit = Unit.objects.filter(id=request.data.get('unit_id'), society=society).first()
         if not amenity or not unit:
             return Response({'detail': 'Invalid amenity or unit'}, status=400)
+        if not _can_use_unit(request.user, unit):
+            return Response({'detail': 'Invalid unit'}, status=403)
         booking = Booking.objects.create(
             society=society,
             amenity=amenity,
@@ -325,7 +418,7 @@ class SosAlertViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
         status_q = self.request.query_params.get('status')
         if status_q:
             qs = qs.filter(status=status_q)
-        if not is_society_admin(self.request.user) and status_q != 'active':
+        if not can_view_all_units(self.request.user) and status_q != 'active':
             qs = qs.filter(unit_id__in=resident_unit_ids(self.request.user))
         return qs
 
@@ -334,6 +427,8 @@ class SosAlertViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
         unit = Unit.objects.filter(id=request.data.get('unit_id'), society=society).first()
         if not unit:
             return Response({'detail': 'Invalid unit'}, status=400)
+        if not _can_use_unit(request.user, unit):
+            return Response({'detail': 'Invalid unit'}, status=403)
         alert = SosAlert.objects.create(
             society=society,
             unit=unit,
@@ -355,6 +450,8 @@ class ComplaintViewSet(SocietyScopedMixin, viewsets.ModelViewSet):
         unit = Unit.objects.filter(id=request.data.get('unit_id'), society=society).first()
         if not unit:
             return Response({'detail': 'Invalid unit'}, status=400)
+        if not _can_use_unit(request.user, unit):
+            return Response({'detail': 'Invalid unit'}, status=403)
         complaint = Complaint.objects.create(
             society=society,
             unit=unit,
@@ -415,7 +512,7 @@ class DashboardView(APIView):
         bills = Bill.objects.filter(
             society=society, period_month=now.month, period_year=now.year
         )
-        if not is_society_admin(request.user, society.id):
+        if not can_view_all_units(request.user, society.id):
             bills = bills.filter(unit_id__in=resident_unit_ids(request.user, society.id))
         total_billed = bills.aggregate(s=Sum('total_amount'))['s'] or 0
         total_collected = bills.filter(status='paid').aggregate(s=Sum('total_amount'))['s'] or 0
@@ -435,3 +532,72 @@ class DashboardView(APIView):
             'month': now.month,
             'year': now.year,
         })
+
+
+class ChatThreadViewSet(viewsets.ViewSet):
+    """Gate guard ↔ flat owner messaging (one thread per unit)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        society = _primary_society(request.user)
+        if not society:
+            return Response([])
+        qs = ChatThread.objects.filter(society=society).select_related('unit')
+        if not can_view_all_units(request.user, society.id):
+            qs = qs.filter(unit_id__in=resident_unit_ids(request.user, society.id))
+        data = ChatThreadSerializer(qs, many=True, context={'request': request}).data
+        return Response(data)
+
+    @action(detail=False, methods=['post'], url_path='open')
+    def open_thread(self, request):
+        society = _primary_society(request.user)
+        if not society:
+            return Response({'detail': 'No society'}, status=400)
+        unit = Unit.objects.filter(id=request.data.get('unit_id'), society=society).first()
+        if not unit:
+            return Response({'detail': 'Invalid unit'}, status=400)
+        if not _can_use_unit(request.user, unit) and not can_view_all_units(request.user, society.id):
+            return Response({'detail': 'Not allowed'}, status=403)
+        # Residents may only open their own unit thread
+        if not can_view_all_units(request.user, society.id):
+            if unit.id not in resident_unit_ids(request.user, society.id):
+                return Response({'detail': 'Not allowed'}, status=403)
+        thread, _ = ChatThread.objects.get_or_create(society=society, unit=unit)
+        return Response(ChatThreadSerializer(thread, context={'request': request}).data)
+
+    def retrieve(self, request, pk=None):
+        thread = self._get_thread(request, pk)
+        if thread is None:
+            return Response({'detail': 'Not found'}, status=404)
+        return Response(ChatThreadSerializer(thread, context={'request': request}).data)
+
+    @action(detail=True, methods=['get', 'post'], url_path='messages')
+    def messages(self, request, pk=None):
+        thread = self._get_thread(request, pk)
+        if thread is None:
+            return Response({'detail': 'Not found'}, status=404)
+
+        if request.method == 'GET':
+            # Mark others' messages as read
+            ChatMessage.objects.filter(thread=thread, read_at__isnull=True).exclude(
+                sender=request.user
+            ).update(read_at=timezone.now())
+            msgs = thread.messages.select_related('sender').all()
+            return Response(ChatMessageSerializer(msgs, many=True).data)
+
+        body = (request.data.get('body') or '').strip()
+        if not body:
+            return Response({'detail': 'Message required'}, status=400)
+        msg = ChatMessage.objects.create(thread=thread, sender=request.user, body=body)
+        thread.save(update_fields=['updated_at'])  # bump ordering
+        return Response(ChatMessageSerializer(msg).data, status=201)
+
+    def _get_thread(self, request, pk):
+        society = _primary_society(request.user)
+        if not society:
+            return None
+        qs = ChatThread.objects.filter(society=society, pk=pk).select_related('unit')
+        if not can_view_all_units(request.user, society.id):
+            qs = qs.filter(unit_id__in=resident_unit_ids(request.user, society.id))
+        return qs.first()

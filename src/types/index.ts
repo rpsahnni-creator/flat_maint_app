@@ -121,4 +121,27 @@ export type Complaint = {
   resolved_at: string | null;
 };
 
-export type Role = 'admin' | 'resident';
+export type Role = 'admin' | 'resident' | 'guard';
+
+export type ChatMessage = {
+  id: string;
+  thread_id: string;
+  sender_id: string;
+  sender_name: string;
+  sender_role: Role;
+  body: string;
+  created_at: string;
+  read_at: string | null;
+};
+
+export type ChatThread = {
+  id: string;
+  unit_id: string;
+  unit_number: string;
+  owner_name: string;
+  owner_phone: string | null;
+  last_message: ChatMessage | null;
+  unread_count: number;
+  updated_at: string;
+  created_at: string;
+};

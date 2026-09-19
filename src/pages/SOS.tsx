@@ -8,7 +8,7 @@ import { Siren, Plus, Check, AlertCircle } from 'lucide-react';
 
 export function SOS() {
   const { role, currentUnit, units } = useApp();
-  const [alerts, setAlerts] = useState<SosAlert[]>([]);
+  const isGateOps = role === 'admin' || role === 'guard';  const [alerts, setAlerts] = useState<SosAlert[]>([]);
   const [unitsMap, setUnitsMap] = useState<Record<string, Unit>>({});
   const [loading, setLoading] = useState(true);
   const [showSos, setShowSos] = useState(false);
@@ -40,7 +40,7 @@ export function SOS() {
   }, []);
 
   async function triggerSos() {
-    const unitId = role === 'admin' ? logUnitId : currentUnit?.id;
+    const unitId = isGateOps ? logUnitId : currentUnit?.id;
     if (!unitId) {
       setError('Please select a unit.');
       return;
@@ -86,7 +86,7 @@ export function SOS() {
           <h1 className="text-2xl font-bold text-slate-900">Emergency SOS</h1>
           <p className="text-slate-500 mt-1">Trigger emergency alerts to security & committee</p>
         </div>
-        {role === 'admin' && (
+        {isGateOps && (
           <Button
             variant="outline"
             onClick={() => { setLogUnitId(''); setError(''); setShowSos(true); }}
@@ -129,12 +129,17 @@ export function SOS() {
                 <div key={a.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white p-3">
                   <div>
                     <p className="font-medium text-slate-900">
-                      {unit?.unit_number ?? 'Unknown'} &middot; {a.alert_type}
+                      {unit?.unit_number ?? 'Unknown'} · {unit?.owner_name ?? ''} · {a.alert_type}
                     </p>
                     {a.message && <p className="text-sm text-slate-500">{a.message}</p>}
                     <p className="text-xs text-slate-400">{formatDateTime(a.created_at)}</p>
+                    {isGateOps && unit?.phone && (
+                      <a href={`tel:${unit.phone}`} className="mt-1 inline-flex text-xs font-medium text-[#9f1239]">
+                        Call {unit.phone}
+                      </a>
+                    )}
                   </div>
-                  {role === 'admin' && (
+                  {isGateOps && (
                     <Button size="sm" variant="primary" onClick={() => resolveAlert(a.id)}>
                       <Check className="h-4 w-4" /> Resolve
                     </Button>
@@ -176,7 +181,7 @@ export function SOS() {
       <Modal
         open={showSos}
         onClose={() => { setShowSos(false); setError(''); }}
-        title={role === 'admin' ? 'Log Emergency Alert' : 'Trigger Emergency SOS'}
+        title={isGateOps ? 'Log Emergency Alert' : 'Trigger Emergency SOS'}
       >
         <div className="space-y-4">
           {error && (
@@ -188,7 +193,7 @@ export function SOS() {
             <Siren className="mx-auto mb-2 h-10 w-10 text-rose-600" />
             <p className="text-sm text-rose-700">This will immediately notify security and committee members.</p>
           </div>
-          {role === 'admin' && (
+          {isGateOps && (
             <Select
               label="Unit"
               value={logUnitId}
@@ -213,8 +218,8 @@ export function SOS() {
           <Textarea label="Details (optional)" value={message} onChange={setMessage} placeholder="Describe the emergency..." rows={3} />
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="outline" onClick={() => { setShowSos(false); setError(''); }}>Cancel</Button>
-            <Button variant="danger" onClick={triggerSos} disabled={role === 'admin' && !logUnitId}>
-              <Siren className="h-4 w-4" /> {role === 'admin' ? 'Log Alert' : 'Send SOS Alert'}
+            <Button variant="danger" onClick={triggerSos} disabled={isGateOps && !logUnitId}>
+              <Siren className="h-4 w-4" /> {isGateOps ? 'Log Alert' : 'Send SOS Alert'}
             </Button>
           </div>
         </div>

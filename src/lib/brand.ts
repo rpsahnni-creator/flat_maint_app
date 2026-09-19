@@ -5,6 +5,6 @@ export const BRAND = {
   clientFull: 'Navya Naman Vatika, Bela Bagan, Deoghar',
   productTagline: 'Society Manager',
   developer: 'Kiji Technology',
+  developerUrl: 'https://kijitechnology.com',
   developedBy: 'Developed by: Kiji Technology',
-  amcNote: 'AMC Partner — Kiji Technology',
 } as const;

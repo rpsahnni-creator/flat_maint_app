@@ -51,7 +51,7 @@ class UserSerializer(serializers.ModelSerializer):
             'last_login', 'roles', 'full_name', 'app_role',
         ]
         read_only_fields = [
-            'id', 'is_active', 'is_staff', 'created_at', 
+            'id', 'email', 'is_active', 'is_staff', 'created_at',
             'updated_at', 'last_login', 'roles', 'app_role',
         ]
     
@@ -63,6 +63,8 @@ class UserSerializer(serializers.ModelSerializer):
         roles = set(obj.roles.values_list('role', flat=True))
         if obj.is_superuser or roles & admin_roles:
             return 'admin'
+        if 'guard' in roles:
+            return 'guard'
         return 'resident'
 
 

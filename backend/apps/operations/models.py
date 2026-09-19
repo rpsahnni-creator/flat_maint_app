@@ -266,3 +266,43 @@ class Complaint(models.Model):
     class Meta:
         db_table = 'complaints'
         ordering = ['-created_at']
+
+
+class ChatThread(models.Model):
+    """One gate↔owner conversation per flat unit."""
+
+    society = models.ForeignKey(
+        'accounts.Society',
+        on_delete=models.CASCADE,
+        related_name='chat_threads',
+    )
+    unit = models.ForeignKey(Unit, on_delete=models.CASCADE, related_name='chat_threads')
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'chat_threads'
+        unique_together = [('society', 'unit')]
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f'Chat {self.unit.unit_number}'
+
+
+class ChatMessage(models.Model):
+    thread = models.ForeignKey(ChatThread, on_delete=models.CASCADE, related_name='messages')
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='chat_messages',
+    )
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'chat_messages'
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f'{self.sender_id}: {self.body[:40]}'

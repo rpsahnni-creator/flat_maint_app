@@ -3,6 +3,8 @@ import type {
   Amenity,
   Bill,
   Booking,
+  ChatMessage,
+  ChatThread,
   Complaint,
   Expense,
   Notice,
@@ -42,7 +44,13 @@ export const dataApi = {
     return unwrapList<Bill>(data);
   },
   async generateBills(period_month: number, period_year: number): Promise<Bill[]> {
-    const { data } = await api.post<Bill[]>('/bills/generate/', { period_month, period_year });
+    const { data } = await api.post('/bills/generate/', { period_month, period_year });
+    // New API returns { bills, count, emails_sent }; older shape was a bare array
+    if (Array.isArray(data)) return data;
+    return (data?.bills ?? []) as Bill[];
+  },
+  async emailBillPdf(id: string, email?: string): Promise<{ sent: boolean; email?: string; reason?: string }> {
+    const { data } = await api.post(`/bills/${id}/email-pdf/`, email ? { email } : {});
     return data;
   },
 
@@ -50,8 +58,35 @@ export const dataApi = {
     const { data } = await api.get('/payments/');
     return unwrapList<Payment>(data);
   },
-  async createPayment(payload: Partial<Payment>): Promise<Payment> {
-    const { data } = await api.post<Payment>('/payments/', payload);
+  async createPayment(payload: Partial<Payment> & { email?: string }): Promise<Payment & {
+    email_sent?: boolean;
+    email_to?: string | null;
+    email_reason?: string | null;
+    pdf_url?: string;
+  }> {
+    const { data } = await api.post('/payments/', payload);
+    return data;
+  },
+  async downloadPaymentPdf(id: string, filename?: string): Promise<void> {
+    const { data } = await api.get(`/payments/${id}/pdf/`, { responseType: 'blob' });
+    const url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename ?? `receipt-${id}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+  async downloadBillPdf(id: string, filename?: string): Promise<void> {
+    const { data } = await api.get(`/bills/${id}/pdf/`, { responseType: 'blob' });
+    const url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename ?? `bill-${id}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+  async resendPaymentEmail(id: string, email?: string): Promise<{ sent: boolean; email?: string; reason?: string }> {
+    const { data } = await api.post(`/payments/${id}/resend-email/`, email ? { email } : {});
     return data;
   },
 
@@ -138,6 +173,23 @@ export const dataApi = {
 
   async dashboard() {
     const { data } = await api.get('/dashboard/');
+    return data;
+  },
+
+  async listChatThreads(): Promise<ChatThread[]> {
+    const { data } = await api.get('/chat-threads/');
+    return unwrapList<ChatThread>(data);
+  },
+  async openChatThread(unit_id: string): Promise<ChatThread> {
+    const { data } = await api.post<ChatThread>('/chat-threads/open/', { unit_id });
+    return data;
+  },
+  async listChatMessages(threadId: string): Promise<ChatMessage[]> {
+    const { data } = await api.get(`/chat-threads/${threadId}/messages/`);
+    return unwrapList<ChatMessage>(data);
+  },
+  async sendChatMessage(threadId: string, body: string): Promise<ChatMessage> {
+    const { data } = await api.post<ChatMessage>(`/chat-threads/${threadId}/messages/`, { body });
     return data;
   },
 };

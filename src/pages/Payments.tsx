@@ -17,6 +17,7 @@ export function Payments({ onNavigate }: { onNavigate: (p: string) => void }) {
   const [qrBill, setQrBill] = useState<Bill | null>(null);
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
 
   // Record payment form
   const [recUnitId, setRecUnitId] = useState('');
@@ -24,6 +25,7 @@ export function Payments({ onNavigate }: { onNavigate: (p: string) => void }) {
   const [recAmount, setRecAmount] = useState('');
   const [recMethod, setRecMethod] = useState<PaymentMethod>('upi');
   const [recRef, setRecRef] = useState('');
+  const [recEmail, setRecEmail] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -81,6 +83,7 @@ export function Payments({ onNavigate }: { onNavigate: (p: string) => void }) {
     }
     setSaving(true);
     setError('');
+    setInfo('');
 
     try {
       const data = await dataApi.createPayment({
@@ -89,11 +92,11 @@ export function Payments({ onNavigate }: { onNavigate: (p: string) => void }) {
         amount,
         method: recMethod,
         reference_no: recRef || null,
+        email: recEmail.trim() || undefined,
       });
 
       setPayments([data, ...payments]);
 
-      // Server updates bill status; mirror locally for immediate UI feedback
       if (recBillId) {
         const bill = bills.find((b) => b.id === recBillId);
         if (bill) {
@@ -106,11 +109,28 @@ export function Payments({ onNavigate }: { onNavigate: (p: string) => void }) {
         }
       }
 
+      // Auto-download PDF receipt / bill
+      try {
+        const unit = unitsMap[recUnitId];
+        await dataApi.downloadPaymentPdf(data.id, `receipt-${unit?.unit_number ?? data.id}.pdf`);
+      } catch {
+        // PDF download is best-effort; payment already saved
+      }
+
+      if (data.email_sent && data.email_to) {
+        setInfo(`Payment saved. PDF downloaded. Confirmation + bill PDF emailed to ${data.email_to}.`);
+      } else {
+        setInfo(
+          `Payment saved and PDF downloaded. Email not sent${data.email_reason ? `: ${data.email_reason}` : ' (no owner email on file)'}.`,
+        );
+      }
+
       setShowRecord(false);
       setRecUnitId('');
       setRecBillId('');
       setRecAmount('');
       setRecRef('');
+      setRecEmail('');
     } catch {
       setError('Could not record the payment. Please try again.');
     } finally {
@@ -118,18 +138,14 @@ export function Payments({ onNavigate }: { onNavigate: (p: string) => void }) {
     }
   }
 
-  function downloadReceipt(payment: Payment) {
-    const unit = unitsMap[payment.unit_id];
-    const bill = payment.bill_id ? bills.find((b) => b.id === payment.bill_id) : null;
-    const societyName = settings?.name ?? 'Society';
-    const content = `${societyName.toUpperCase()}\nPAYMENT RECEIPT\n\nReceipt No: ${payment.id.slice(0, 8).toUpperCase()}\nDate: ${formatDateTime(payment.paid_at)}\n\nUnit: ${unit?.unit_number}\nOwner: ${unit?.owner_name}\n${bill ? `Bill Period: ${monthLabel(bill.period_month, bill.period_year)}\n` : ''}\nAmount: ${formatCurrency(Number(payment.amount))}\nMethod: ${payment.method.toUpperCase()}\nReference: ${payment.reference_no ?? '—'}\n\nStatus: PAID\n\nThank you for your payment.\n${societyName}`;
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `receipt-${unit?.unit_number}-${payment.id.slice(0, 6)}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+  async function downloadReceipt(payment: Payment) {
+    setError('');
+    try {
+      const unit = unitsMap[payment.unit_id];
+      await dataApi.downloadPaymentPdf(payment.id, `receipt-${unit?.unit_number ?? payment.id}.pdf`);
+    } catch {
+      setError('Could not download PDF receipt.');
+    }
   }
 
   if (loading) return <div className="py-20 text-center text-slate-400">Loading payments...</div>;
@@ -162,6 +178,11 @@ export function Payments({ onNavigate }: { onNavigate: (p: string) => void }) {
       {error && !showRecord && (
         <div className="flex items-center gap-2 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">
           <AlertCircle className="h-4 w-4 shrink-0" /> {error}
+        </div>
+      )}
+      {info && !showRecord && (
+        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          <CheckCircle2 className="h-4 w-4 shrink-0" /> {info}
         </div>
       )}
 
@@ -235,8 +256,13 @@ export function Payments({ onNavigate }: { onNavigate: (p: string) => void }) {
                       <td className="px-4 py-3 text-slate-500">{p.reference_no ?? '—'}</td>
                       <td className="px-4 py-3 text-slate-500">{formatDateTime(p.paid_at)}</td>
                       <td className="px-4 py-3">
-                        <button onClick={() => downloadReceipt(p)} className="text-slate-400 hover:text-teal-600">
-                          <Download className="h-4 w-4" />
+                        <button
+                          type="button"
+                          onClick={() => void downloadReceipt(p)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                          title="Download PDF receipt"
+                        >
+                          <Download className="h-3.5 w-3.5" /> PDF
                         </button>
                       </td>
                     </tr>
@@ -263,7 +289,7 @@ export function Payments({ onNavigate }: { onNavigate: (p: string) => void }) {
             <div className="w-full rounded-xl bg-slate-50 p-3 text-center">
               <p className="text-sm text-slate-600">
                 Scan this QR code with any UPI app (Google Pay, PhonePe, Paytm) to pay.
-                After paying, your receipt will be generated automatically once the admin records the payment.
+                After paying, admin will record the payment — you get a PDF bill/receipt and email confirmation.
               </p>
             </div>
             <div className="flex w-full gap-3">
@@ -328,6 +354,16 @@ export function Payments({ onNavigate }: { onNavigate: (p: string) => void }) {
             ]}
           />
           <Input label="Reference Number (optional)" value={recRef} onChange={setRecRef} placeholder="UTR / Cheque no" />
+          <Input
+            label="Owner email for PDF bill (optional)"
+            type="email"
+            value={recEmail}
+            onChange={setRecEmail}
+            placeholder="Uses linked owner account email if blank"
+          />
+          <p className="text-xs text-slate-500">
+            After saving, a PDF bill/receipt downloads here and a confirmation email with the PDF is sent to the owner.
+          </p>
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="outline" onClick={() => { setShowRecord(false); setError(''); }}>Cancel</Button>
             <Button onClick={recordPayment} disabled={saving || !recUnitId || !recAmount}>

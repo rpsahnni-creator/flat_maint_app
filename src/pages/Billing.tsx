@@ -48,13 +48,14 @@ export function Billing() {
     setError('');
     setInfo('');
     try {
-      const data = await dataApi.generateBills(genMonth, genYear);
-      if (!data || data.length === 0) {
+      const created = await dataApi.generateBills(genMonth, genYear);
+      if (!created || created.length === 0) {
         setInfo(`Bills for ${monthLabel(genMonth, genYear)} have already been generated for every active unit.`);
         return;
       }
-      setBills([...data, ...bills]);
+      setBills([...created, ...bills]);
       setShowGenerate(false);
+      setInfo(`${created.length} bill(s) generated. PDF ready to download — linked owners also get the bill PDF by email.`);
     } catch {
       setError('Could not generate bills. Please try again.');
     } finally {
@@ -62,16 +63,17 @@ export function Billing() {
     }
   }
 
-  function downloadBill(bill: Bill) {
-    const unit = unitsMap[bill.unit_id];
-    const content = `${(settings?.name ?? 'SOCIETY').toUpperCase()}\nMAINTENANCE BILL\n\nUnit: ${unit?.unit_number}\nOwner: ${unit?.owner_name}\nPeriod: ${monthLabel(bill.period_month, bill.period_year)}\nDue Date: ${formatDate(bill.due_date)}\n\nBase Amount: ${formatCurrency(Number(bill.base_amount))}\nLate Fee: ${formatCurrency(Number(bill.late_fee))}\nTotal: ${formatCurrency(Number(bill.total_amount))}\nStatus: ${bill.status.toUpperCase()}\n\nUPI ID: ${settings?.upi_id}\nPayee: ${settings?.payee_name}\nBank: ${settings?.bank_name}\nA/C: ${settings?.account_number}\nIFSC: ${settings?.ifsc}\n\nThank you for your payment.`;
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `bill-${unit?.unit_number}-${bill.period_month}-${bill.period_year}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+  async function downloadBill(bill: Bill) {
+    setError('');
+    try {
+      const unit = unitsMap[bill.unit_id];
+      await dataApi.downloadBillPdf(
+        bill.id,
+        `bill-${unit?.unit_number ?? 'unit'}-${bill.period_month}-${bill.period_year}.pdf`,
+      );
+    } catch {
+      setError('Could not download PDF bill.');
+    }
   }
 
   const myBills = bills.filter((b) => b.unit_id === currentUnit?.id);
@@ -102,6 +104,15 @@ export function Billing() {
           </Button>
         )}
       </div>
+
+      {error && (
+        <div className="flex items-center gap-2 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <AlertCircle className="h-4 w-4 shrink-0" /> {error}
+        </div>
+      )}
+      {info && !showGenerate && (
+        <div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{info}</div>
+      )}
 
       {role === 'admin' && (
         <div className="flex flex-wrap gap-3">
@@ -142,7 +153,7 @@ export function Billing() {
                   <th className="px-4 py-3 font-medium">Total</th>
                   <th className="px-4 py-3 font-medium">Due Date</th>
                   <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Action</th>
+                  <th className="px-4 py-3 font-medium">PDF</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -163,8 +174,13 @@ export function Billing() {
                       <td className="px-4 py-3 text-slate-500">{formatDate(b.due_date)}</td>
                       <td className="px-4 py-3"><Badge color={statusColor(b.status)}>{b.status}</Badge></td>
                       <td className="px-4 py-3">
-                        <button onClick={() => downloadBill(b)} className="text-slate-400 hover:text-teal-600">
-                          <Download className="h-4 w-4" />
+                        <button
+                          type="button"
+                          onClick={() => void downloadBill(b)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                          title="Download bill PDF"
+                        >
+                          <Download className="h-3.5 w-3.5" /> PDF
                         </button>
                       </td>
                     </tr>

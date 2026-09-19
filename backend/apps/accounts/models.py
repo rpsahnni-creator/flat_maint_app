@@ -46,6 +46,7 @@ class Role(models.Model):
         ('society_admin', 'Society Admin'),
         ('accountant', 'Accountant'),
         ('manager', 'Manager'),
+        ('guard', 'Gate Guard'),
         ('resident', 'Resident'),
     ]
     

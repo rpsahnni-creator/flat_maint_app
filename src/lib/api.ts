@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) || 'http://127.0.0.1:8001';
+const rawBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
+// Unset/empty → same-origin `/api/v1` (single-host production). Local Vite uses .env value.
+const API_BASE = (rawBase === undefined || rawBase === '' ? '' : rawBase).replace(/\/$/, '');
 
 const ACCESS_KEY = 'gv_access_token';
 const REFRESH_KEY = 'gv_refresh_token';
@@ -21,11 +23,10 @@ export function setTokens(access: string, refresh: string) {
 export function clearTokens() {
   localStorage.removeItem(ACCESS_KEY);
   localStorage.removeItem(REFRESH_KEY);
-  localStorage.removeItem('demo_user');
 }
 
 export const api = axios.create({
-  baseURL: `${API_BASE.replace(/\/$/, '')}/api/v1`,
+  baseURL: `${API_BASE}/api/v1`,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -43,7 +44,7 @@ async function refreshAccessToken(): Promise<string | null> {
   const refresh = getRefreshToken();
   if (!refresh) return null;
   try {
-    const { data } = await axios.post(`${API_BASE.replace(/\/$/, '')}/api/v1/auth/token/refresh/`, {
+    const { data } = await axios.post(`${API_BASE}/api/v1/auth/token/refresh/`, {
       refresh,
     });
     setTokens(data.access, data.refresh ?? refresh);

@@ -17,8 +17,10 @@ ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1', 'te
 #     }
 # }
 
-# Email backend for development (console)
-EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
+# Email — console + also write .eml files under backend/logs/outbox
+EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.filebased.EmailBackend')
+EMAIL_FILE_PATH = BASE_DIR / 'logs' / 'outbox'
+EMAIL_FILE_PATH.mkdir(parents=True, exist_ok=True)
 
 # CORS for development
 CORS_ALLOW_ALL_ORIGINS = True

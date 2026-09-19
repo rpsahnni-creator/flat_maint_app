@@ -6,6 +6,7 @@ export type AuthUser = {
   id: number;
   email: string;
   display_name?: string;
+  phone_number?: string | null;
   app_role: Role;
 };
 
@@ -19,10 +20,27 @@ type AuthState = {
   signInWithGoogle: () => Promise<void>;
   requestOTP: (email: string) => Promise<{ demo_code?: string }>;
   verifyOTP: (email: string, token: string) => Promise<void>;
+  updateProfile: (payload: { display_name?: string; phone_number?: string }) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
+
+function mapUser(data: {
+  id: number;
+  email: string;
+  display_name?: string;
+  phone_number?: string | null;
+  app_role?: string;
+}): AuthUser {
+  return {
+    id: data.id,
+    email: data.email,
+    display_name: data.display_name,
+    phone_number: data.phone_number ?? null,
+    app_role: data.app_role === 'admin' ? 'admin' : data.app_role === 'guard' ? 'guard' : 'resident',
+  };
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -37,12 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     const { data } = await api.get('/auth/me/');
-    setUser({
-      id: data.id,
-      email: data.email,
-      display_name: data.display_name,
-      app_role: data.app_role === 'admin' ? 'admin' : 'resident',
-    });
+    setUser(mapUser(data));
   }, []);
 
   useEffect(() => {
@@ -88,6 +101,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await loadMe();
   }, [loadMe]);
 
+  const updateProfile = useCallback(async (payload: { display_name?: string; phone_number?: string }) => {
+    const { data } = await api.patch('/auth/me/', payload);
+    setUser(mapUser(data));
+  }, []);
+
   const signOut = useCallback(async () => {
     try {
       const refresh = localStorage.getItem('gv_refresh_token');
@@ -115,6 +133,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInWithGoogle,
         requestOTP,
         verifyOTP,
+        updateProfile,
         signOut,
       }}
     >

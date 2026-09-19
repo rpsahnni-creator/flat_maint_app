@@ -1,4 +1,4 @@
-# Green Valley Society Manager — local run helpers (NO Docker)
+# Navya Naman Vatika Society Manager — local run helpers (NO Docker)
 # Usage (from repo root):
 #   .\scripts\run-dev.ps1
 #   .\scripts\run-api.ps1

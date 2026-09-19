@@ -29,31 +29,41 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self.stdout.write('Seeding demo data...')
 
-        society, created = Society.objects.get_or_create(
-            name='Navya Naman Vatika',
-            defaults={
-                'address': 'Bela Bagan, Deoghar',
-                'upi_id': 'navyanaman@upi',
-                'payee_name': 'Navya Naman Vatika',
-                'bank_name': 'HDFC Bank',
-                'account_number': '123456789012',
-                'ifsc': 'HDFC0001234',
-                'monthly_rate_per_sqft': 3.00,
-                'late_fee_per_day': 5.00,
-                'due_day_of_month': 10,
-            },
-        )
-        # Rebrand any older demo society name
+        society_defaults = {
+            'address': 'Bela Bagan, Deoghar',
+            'upi_id': 'navyanaman@upi',
+            'payee_name': 'Navya Naman Vatika',
+            'bank_name': 'HDFC Bank',
+            'account_number': '123456789012',
+            'ifsc': 'HDFC0001234',
+            'monthly_rate_per_sqft': 3.00,
+            'late_fee_per_day': 5.00,
+            'due_day_of_month': 10,
+        }
+        # Rebrand older demo name, then pick/create a single canonical society
         Society.objects.filter(name='Green Valley Society').update(
             name='Navya Naman Vatika',
             address='Bela Bagan, Deoghar',
             payee_name='Navya Naman Vatika',
             upi_id='navyanaman@upi',
         )
-        if not created:
-            society.address = society.address or 'Bela Bagan, Deoghar'
-            society.payee_name = 'Navya Naman Vatika'
-            society.save(update_fields=['address', 'payee_name'])
+        society = Society.objects.filter(name='Navya Naman Vatika').order_by('id').first()
+        if society is None:
+            society = Society.objects.create(name='Navya Naman Vatika', **society_defaults)
+            created = True
+        else:
+            created = False
+            for key, value in society_defaults.items():
+                setattr(society, key, value)
+            society.save()
+            # Merge/remove accidental duplicate societies with the same name
+            for dup in Society.objects.filter(name='Navya Naman Vatika').exclude(pk=society.pk):
+                dup_id = dup.pk
+                for model in (Unit, Bill, Payment, Expense, Notice, Amenity, Booking, Visitor, Complaint, SosAlert):
+                    model.objects.filter(society=dup).delete()
+                Role.objects.filter(society=dup).delete()
+                dup.delete()
+                self.stdout.write(self.style.WARNING(f'Removed duplicate society id={dup_id}'))
         self.stdout.write(self.style.SUCCESS(f'Society: {society.name} ({society.address})'))
         self.stdout.write('AMC / Developed by: Kiji Technology')
 
@@ -62,6 +72,7 @@ class Command(BaseCommand):
             {'email': 'society.admin@greenvalley.com', 'display_name': 'Society Admin', 'role': 'society_admin', 'password': 'Admin123!'},
             {'email': 'accountant@greenvalley.com', 'display_name': 'Accountant', 'role': 'accountant', 'password': 'Admin123!'},
             {'email': 'manager@greenvalley.com', 'display_name': 'Manager', 'role': 'manager', 'password': 'Admin123!'},
+            {'email': 'guard@greenvalley.com', 'display_name': 'Gate Guard', 'role': 'guard', 'password': 'Guard123!'},
             {'email': 'resident@greenvalley.com', 'display_name': 'John Resident', 'role': 'resident', 'password': 'Resident123!'},
         ]
 
@@ -71,14 +82,15 @@ class Command(BaseCommand):
                 email=user_data['email'],
                 defaults={'display_name': user_data['display_name'], 'is_active': True},
             )
-            if created:
-                user.set_password(user_data['password'])
-                if user_data['role'] in ('super_admin', 'society_admin'):
-                    user.is_staff = True
-                if user_data['role'] == 'super_admin':
-                    user.is_superuser = True
-                user.save()
-            Role.objects.get_or_create(
+            user.display_name = user_data['display_name']
+            user.is_active = True
+            user.set_password(user_data['password'])
+            if user_data['role'] in ('super_admin', 'society_admin'):
+                user.is_staff = True
+            if user_data['role'] == 'super_admin':
+                user.is_superuser = True
+            user.save()
+            Role.objects.update_or_create(
                 user=user, society=society, defaults={'role': user_data['role']}
             )
             users[user_data['role']] = user
@@ -184,34 +196,35 @@ class Command(BaseCommand):
                 'status': 'confirmed',
             },
         )
-        Visitor.objects.get_or_create(
-            society=society,
-            visitor_name='John Doe',
-            host_unit=units[0],
-            defaults={
-                'purpose': 'personal',
-                'entry_time': timezone.now() - timedelta(hours=5),
-                'exit_time': timezone.now() - timedelta(hours=3),
-                'status': 'checked_out',
-            },
-        )
-        Complaint.objects.get_or_create(
-            society=society,
-            unit=units[0],
-            category='plumbing',
-            defaults={'description': 'Water leakage in bathroom', 'status': 'open'},
-        )
-        SosAlert.objects.get_or_create(
-            society=society,
-            unit=units[0],
-            alert_type='medical',
-            defaults={
-                'message': 'Resolved demo alert',
-                'status': 'resolved',
-                'resolved_at': timezone.now(),
-            },
-        )
+        if not Visitor.objects.filter(society=society, visitor_name='John Doe', host_unit=units[0]).exists():
+            Visitor.objects.create(
+                society=society,
+                visitor_name='John Doe',
+                host_unit=units[0],
+                purpose='personal',
+                entry_time=timezone.now() - timedelta(hours=5),
+                exit_time=timezone.now() - timedelta(hours=3),
+                status='checked_out',
+            )
+        if not Complaint.objects.filter(society=society, unit=units[0], category='plumbing').exists():
+            Complaint.objects.create(
+                society=society,
+                unit=units[0],
+                category='plumbing',
+                description='Water leakage in bathroom',
+                status='open',
+            )
+        if not SosAlert.objects.filter(society=society, unit=units[0], alert_type='medical').exists():
+            SosAlert.objects.create(
+                society=society,
+                unit=units[0],
+                alert_type='medical',
+                message='Resolved demo alert',
+                status='resolved',
+                resolved_at=timezone.now(),
+            )
 
         self.stdout.write(self.style.SUCCESS('Demo data seeded successfully!'))
         self.stdout.write('  Admin: admin@greenvalley.com / Admin123!')
+        self.stdout.write('  Guard: guard@greenvalley.com / Guard123!')
         self.stdout.write('  Resident: resident@greenvalley.com / Resident123!')

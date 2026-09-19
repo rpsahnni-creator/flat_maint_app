@@ -9,6 +9,7 @@ from .views import (
     AmenityViewSet,
     BillViewSet,
     BookingViewSet,
+    ChatThreadViewSet,
     ComplaintViewSet,
     DashboardView,
     ExpenseViewSet,
@@ -31,6 +32,7 @@ router.register(r'amenities', AmenityViewSet, basename='amenities')
 router.register(r'bookings', BookingViewSet, basename='bookings')
 router.register(r'sos-alerts', SosAlertViewSet, basename='sos-alerts')
 router.register(r'complaints', ComplaintViewSet, basename='complaints')
+router.register(r'chat-threads', ChatThreadViewSet, basename='chat-threads')
 
 urlpatterns = [
     path('dashboard/', DashboardView.as_view(), name='dashboard'),

@@ -102,7 +102,7 @@ export function Login() {
             )}
 
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600">
-              Demo: admin@greenvalley.com / Admin123! · resident@greenvalley.com / Resident123!
+              Demo: admin@greenvalley.com / Admin123! · guard@greenvalley.com / Guard123! · resident@greenvalley.com / Resident123!
             </div>
 
             {mode === 'password' && (

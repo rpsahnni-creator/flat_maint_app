@@ -8,7 +8,7 @@ import { Shield, Plus, Check, X, LogIn, LogOut, Search, AlertCircle } from 'luci
 
 export function Visitors() {
   const { role, currentUnit, units } = useApp();
-  const [visitors, setVisitors] = useState<Visitor[]>([]);
+  const isGateOps = role === 'admin' || role === 'guard';  const [visitors, setVisitors] = useState<Visitor[]>([]);
   const [unitsMap, setUnitsMap] = useState<Record<string, Unit>>({});
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -44,7 +44,7 @@ export function Visitors() {
   async function addVisitor() {
     if (!name.trim()) return;
     const hostId = hostUnitId || (role === 'resident' ? currentUnit?.id : null) || null;
-    if (role === 'admin' && !hostId) {
+    if (isGateOps && !hostId) {
       setError('Please select a host unit.');
       return;
     }
@@ -106,7 +106,11 @@ export function Visitors() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Visitor Management</h1>
           <p className="text-slate-500 mt-1">
-            {role === 'resident' ? 'Guests visiting your unit' : 'Gate security & visitor approvals'}
+            {role === 'resident'
+              ? 'Guests visiting your unit'
+              : role === 'guard'
+                ? 'Log arrivals, inform flat owners & manage gate check-in'
+                : 'Gate security & visitor approvals'}
           </p>
         </div>
         <Button onClick={() => { setError(''); setShowAdd(true); }}>
@@ -120,7 +124,7 @@ export function Visitors() {
         </div>
       )}
 
-      {role === 'admin' && (
+      {isGateOps && (
         <div className="relative max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <input
@@ -154,14 +158,19 @@ export function Visitors() {
                     </div>
                     <p className="text-sm text-slate-500">{v.purpose ?? 'No purpose specified'}</p>
                     <p className="text-xs text-slate-400 mt-1">
-                      {role === 'admin' && <>Host: {unit?.unit_number ?? '—'} &middot; </>}
+                      {isGateOps && <>Host: {unit?.unit_number ?? '—'} {unit?.owner_name ? `· ${unit.owner_name}` : ''} &middot; </>}
                       {formatDateTime(v.created_at)}
                     </p>
+                    {isGateOps && unit?.phone && (
+                      <a href={`tel:${unit.phone}`} className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-[#9f1239]">
+                        Call owner {unit.phone}
+                      </a>
+                    )}
                     {v.entry_time && <p className="text-xs text-slate-400">In: {formatDateTime(v.entry_time)}</p>}
                     {v.exit_time && <p className="text-xs text-slate-400">Out: {formatDateTime(v.exit_time)}</p>}
                   </div>
                 </div>
-                {role === 'admin' && (
+                {isGateOps && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {v.status === 'pending' && (
                       <>
@@ -200,12 +209,12 @@ export function Visitors() {
           )}
           <Input label="Visitor Name" value={name} onChange={setName} placeholder="Guest name" />
           <Textarea label="Purpose of Visit" value={purpose} onChange={setPurpose} placeholder="e.g. Delivery, Family visit, Service..." />
-          {role === 'admin' && (
+          {isGateOps && (
             <Select
-              label="Host Unit"
+              label="Host Unit / Flat Owner"
               value={hostUnitId}
               onChange={setHostUnitId}
-              options={[{ value: '', label: 'Select host unit...' }, ...units.map((u) => ({ value: u.id, label: `${u.unit_number} - ${u.owner_name}` }))]}
+              options={[{ value: '', label: 'Select host unit...' }, ...units.map((u) => ({ value: u.id, label: `${u.unit_number} - ${u.owner_name}${u.phone ? ` (${u.phone})` : ''}` }))]}
             />
           )}
           <div className="flex justify-end gap-3 pt-2">

@@ -8,6 +8,8 @@ from .models import (
     Amenity,
     Bill,
     Booking,
+    ChatMessage,
+    ChatThread,
     Complaint,
     Expense,
     Notice,
@@ -203,3 +205,76 @@ class SocietySettingsSerializer(serializers.Serializer):
     late_fee_per_day = serializers.DecimalField(max_digits=10, decimal_places=2)
     due_day_of_month = serializers.IntegerField()
     created_at = serializers.DateTimeField()
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    id = serializers.SerializerMethodField()
+    thread_id = serializers.SerializerMethodField()
+    sender_id = serializers.SerializerMethodField()
+    sender_name = serializers.SerializerMethodField()
+    sender_role = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChatMessage
+        fields = [
+            'id', 'thread_id', 'sender_id', 'sender_name', 'sender_role',
+            'body', 'created_at', 'read_at',
+        ]
+        read_only_fields = ['created_at', 'read_at']
+
+    def get_id(self, obj):
+        return str(obj.pk)
+
+    def get_thread_id(self, obj):
+        return str(obj.thread_id)
+
+    def get_sender_id(self, obj):
+        return str(obj.sender_id)
+
+    def get_sender_name(self, obj):
+        return obj.sender.display_name or obj.sender.email
+
+    def get_sender_role(self, obj):
+        roles = set(obj.sender.roles.values_list('role', flat=True))
+        admin_roles = {'super_admin', 'society_admin', 'accountant', 'manager'}
+        if obj.sender.is_superuser or roles & admin_roles:
+            return 'admin'
+        if 'guard' in roles:
+            return 'guard'
+        return 'resident'
+
+
+class ChatThreadSerializer(serializers.ModelSerializer):
+    id = serializers.SerializerMethodField()
+    unit_id = serializers.SerializerMethodField()
+    unit_number = serializers.CharField(source='unit.unit_number', read_only=True)
+    owner_name = serializers.CharField(source='unit.owner_name', read_only=True)
+    owner_phone = serializers.CharField(source='unit.phone', read_only=True)
+    last_message = serializers.SerializerMethodField()
+    unread_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChatThread
+        fields = [
+            'id', 'unit_id', 'unit_number', 'owner_name', 'owner_phone',
+            'last_message', 'unread_count', 'updated_at', 'created_at',
+        ]
+
+    def get_id(self, obj):
+        return str(obj.pk)
+
+    def get_unit_id(self, obj):
+        return str(obj.unit_id)
+
+    def get_last_message(self, obj):
+        msg = obj.messages.order_by('-created_at').first()
+        if not msg:
+            return None
+        return ChatMessageSerializer(msg).data
+
+    def get_unread_count(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return 0
+        return obj.messages.filter(read_at__isnull=True).exclude(sender=user).count()
